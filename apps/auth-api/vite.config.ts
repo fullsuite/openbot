@@ -57,6 +57,7 @@ export default defineConfig(({ command }) => {
       developmentLanGuard(),
       developmentApnsProxy(),
       cloudflare({
+        configPath: process.env.OPENBOT_WRANGLER_CONFIG,
         viteEnvironment: { name: "ssr" },
         config(config) {
           // `vite dev` runs no relay Worker, so local email leaves from the local socket. The plugin

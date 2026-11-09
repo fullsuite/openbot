@@ -19,6 +19,7 @@ import {
 } from "./remote-control-plane";
 import { SalesAnalyticsDelivery } from "./sales-analytics-delivery";
 import { checkSignalEntry, SIGNAL_ENTRY_CRON, type SignalEntryBindings } from "./signal-entry-failover";
+import { type SupabaseConsentBindings, supabaseConsent } from "./supabase-consent";
 import type { WorkerBindings } from "./types";
 
 type WorkerFetch = (request: Request) => Response | Promise<Response>;
@@ -37,6 +38,7 @@ export function createWorkerHandler(
     async fetch(
       request: Request,
       workerBindings: Pick<WorkerBindings, "MARKETPLACE_INGRESS_RATE_LIMITER"> &
+        SupabaseConsentBindings &
         Partial<
           Pick<WorkerBindings, "SITES" | "SITE_LOCAL_ORIGIN" | "DB" | "OPENPANEL_CLIENT_ID" | "OPENPANEL_CLIENT_SECRET">
         >,
@@ -45,6 +47,8 @@ export function createWorkerHandler(
       const bindings = workerBindings.DB ? { ...workerBindings, DB: observedD1(workerBindings.DB) } : workerBindings;
       const hostRedirect = canonicalHostRedirect(request);
       if (hostRedirect) return hostRedirect;
+      const consent = await supabaseConsent(request, bindings);
+      if (consent) return consent;
       if (request.method === "GET" && new URL(request.url).pathname === "/billing/checkout-return") {
         return runApiEffect(checkoutReturnResponse(request, bindings));
       }

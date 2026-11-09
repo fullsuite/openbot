@@ -56,15 +56,23 @@ Keep the private JWK secret. With it, a person can open each host that uses your
    ```sh
    bun install --frozen-lockfile
    cd apps/auth-api
-   bunx wrangler login
-   bunx wrangler d1 create openbot-auth
-   bunx wrangler r2 bucket create openbot-avatars
-   bunx wrangler r2 bucket create openbot-skills
-   bunx wrangler r2 bucket create openbot-sites
+   ../../node_modules/.bin/wrangler login
+   ../../node_modules/.bin/wrangler d1 create openbot-self-hosted-auth
+   ../../node_modules/.bin/wrangler r2 bucket create openbot-self-hosted-avatars
+   ../../node_modules/.bin/wrangler r2 bucket create openbot-self-hosted-skills
+   ../../node_modules/.bin/wrangler r2 bucket create openbot-self-hosted-sites
    ```
 
-2. Edit the top level of `apps/auth-api/wrangler.jsonc`. Do not change the `env` section.
-   - `routes`: replace all entries with `{ "pattern": "api.example.com", "custom_domain": true }`.
+2. Copy the self-hosted config into the ignored `.wrangler` directory. The relative paths in the
+   config assume this location.
+
+   ```sh
+   mkdir -p .wrangler/self-hosted
+   cp -n wrangler.self-hosted.example.json .wrangler/self-hosted/wrangler.json
+   ```
+
+   In that copy, set:
+   - `routes`: the Cloudflare custom domain for the account service.
    - `d1_databases`: set `database_id` to the ID that `d1 create` printed.
    - `r2_buckets`: set the bucket names, if you used other names.
    - `vars`:
@@ -73,9 +81,10 @@ Keep the private JWK secret. With it, a person can open each host that uses your
      - `REMOTE_TICKET_KEY_ID`: the key ID from step 1.
      - `REMOTE_SIGNAL_URL`: `wss://signal.example.com/v1/signal`.
      - `REMOTE_AUTH_WEBHOOK_URL`: `https://signal.example.com/internal/auth-events`.
-     - `HOSTED_SERVERS_ENABLED`: `"false"`.
+     - Remove the three `SUPABASE_*` values if using email codes alone. See [Supabase sign-in](#supabase-sign-in).
 
-3. Put the Worker secrets in `apps/auth-api/.env.self-hosted`. Git ignores this file name.
+3. Put the Worker secrets in your secret store. If exporting a deploy file, give it mode `0600`
+   and keep it outside the checkout. In a dotenv file, use the following names.
 
    ```sh
    EMAIL_SMTP_PASSWORD=...
@@ -86,10 +95,15 @@ Keep the private JWK secret. With it, a person can open each host that uses your
    REMOTE_AUTH_WEBHOOK_SECRET=...
    ```
 
-4. Deploy. The script puts the secrets, applies the D1 migrations, builds and deploys the Worker:
+4. Apply the D1 migrations, build with the self-hosted config and deploy. Run from `apps/auth-api`.
+   Set `account_secrets_file` to the absolute path to the secrets file.
 
    ```sh
-   bunx dotenvx run -f .env.self-hosted -- bun ../../scripts/deploy-auth-api.ts
+   account_config="$PWD/.wrangler/self-hosted/wrangler.json"
+   ../../node_modules/.bin/wrangler d1 migrations apply DB --remote --config "$account_config"
+   OPENBOT_WRANGLER_CONFIG="$account_config" bun run build
+   ../../node_modules/.bin/wrangler deploy --config dist/server/wrangler.json \
+     --secrets-file "$account_secrets_file"
    ```
 
 5. Check the service. Each command must return `200`:
@@ -98,6 +112,31 @@ Keep the private JWK secret. With it, a person can open each host that uses your
    curl -fsS https://api.example.com/health/live
    curl -fsS https://api.example.com/.well-known/jwks.json
    ```
+
+### Supabase sign-in
+
+For an invite-only pilot, use a Supabase project with email/password sign-in, an asymmetric JWT
+signing key and the OAuth 2.1 server enabled. The project Site URL must serve the consent page.
+Use a separate project if the existing project's Site URL is used by another application.
+
+1. Set the Site URL to the account service origin and the OAuth Authorization Path to
+   `/oauth/consent`. Register a confidential OAuth client with the redirect URI
+   `https://api.example.com/v1/auth/company/callback`.
+2. Set `SUPABASE_AUTH_URL` to the Supabase issuer including `/auth/v1`, set
+   `SUPABASE_PUBLISHABLE_KEY` to the project's publishable key and set
+   `SUPABASE_OAUTH_CLIENT_ID` to the registered client's ID. Add a persistent
+   `COMPANY_SIGN_IN_SECRET` of at least 32 random bytes to the Worker secrets. The
+   OAuth client secret goes into the OpenBot owner settings in step 4.
+3. Register the host and sign in as its owner with an email code. Provision the approved
+   Supabase users and confirm their email addresses. They need an existing Supabase password
+   for the consent screen.
+4. In the desktop app, open **Server settings → Members → Company sign-in**. Enter the
+   Supabase issuer, OAuth client ID and secret, and the organization email domain. Add
+   the TXT record shown by the app to that domain's DNS. Test sign-in with a verified user
+   on that domain. Successful sign-in joins a new member if a seat is available.
+
+See [Supabase OAuth server setup](https://supabase.com/docs/guides/auth/oauth-server/getting-started)
+and [Company sign-in](architecture/servers.md#company-sign-in).
 
 ## 3. Start Signal and TURN
 
@@ -116,7 +155,7 @@ Keep the private JWK secret. With it, a person can open each host that uses your
 2. Start the services and check Signal:
 
    ```sh
-   docker compose -f remote/compose.yaml --env-file remote/.env.self-hosted up -d --build
+   docker compose -f remote/compose.yaml --env-file remote/.env.self-hosted up -d --build acme remote-api coturn
    curl -fsS https://signal.example.com/health/ready
    ```
 
